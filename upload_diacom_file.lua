@@ -1,97 +1,95 @@
--- Function to check if the instance is already uploaded to AIH
-function CheckForDuplicateAIH(instanceId, aihUrl)
-    local command = string.format(
-        'curl -s -X GET %s/check_duplicate/%s',
-        aihUrl,
-        instanceId
-    )
-    local response = io.popen(command):read("*a")
-    print("Response from AIH check: " .. response)
-    return response:match("duplicate") ~= nil
+-- Function to log with timestamp
+function log(message)
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    print("[" .. timestamp .. "] " .. message)
 end
 
 -- Function to extract the latest Instance ID from Orthanc
 function GetLatestInstanceID(orthancUrl)
     local command = string.format('curl -s -X GET %s/instances', orthancUrl)
     local response = io.popen(command):read("*a")
-    print("Response from Orthanc: " .. response)
+    log("Response from Orthanc: " .. response)
     local instanceId = response:match('"([a-f0-9%-]+)"')
     return instanceId
 end
 
--- Function to push the Instance ID to AIH Server using curl
--- Function to push the Instance ID to AIH Server using curl
-function PushToAIH(instanceId, orthancUrl, aihUrl)
-    -- Ensure AIH URL has a trailing slash
-    if not aihUrl:match("/$") then
-        aihUrl = aihUrl .. "/"
-    end
-
-    -- Construct JSON data
+-- Function to upload the instance to Flask server
+function UploadToFlask(instanceId, orthancUrl, flaskApiUrl)
     local jsonData = string.format('{"instance_id":"%s","orthanc_url":"%s"}', instanceId, orthancUrl)
-    
-    -- Use -L to follow redirects
     local command = string.format(
-        'curl -L -X POST -H "Content-Type: application/json" -d \'%s\' %supload',
+        'curl -s -X POST -H "Content-Type: application/json" -d \'%s\' %s/upload',
         jsonData,
-        aihUrl
+        flaskApiUrl
     )
-    
-    -- Execute the curl command and capture the response
     local response = io.popen(command):read("*a")
-    print("Response from AIH: " .. response)
-    
-    -- Check if the response from AIH indicates success
+    log("Response from Flask: " .. response)
+
     if response:match("success") then
-        print("Instance successfully pushed to AIH!")
-        DeleteFileAfterDelay(orthancUrl, instanceId)
+        log("Instance successfully uploaded to Flask!")
+        RunStudy(flaskApiUrl, instanceId) -- Trigger study after upload
     else
-        print("Failed to push to AIH. Retrying...")
-        RetryFileUpload(orthancUrl, aihUrl, instanceId)
+        log("Failed to upload to Flask. Retrying...")
+        RetryFileUpload(orthancUrl, flaskApiUrl, instanceId)
     end
 end
 
+-- Function to trigger the study process on Flask server
+function RunStudy(flaskApiUrl, instanceId)
+    local jsonData = string.format('{"instance_id": "%s"}', instanceId)
+    local command = string.format(
+        'curl -s -X POST -H "Content-Type: application/json" -d \'%s\' %s/run_study',
+        jsonData,
+        flaskApiUrl
+    )
+    local response = io.popen(command):read("*a")
+    log("Response from Run Study: " .. response)
 
--- Function to retry file upload if it fails
-function RetryFileUpload(orthancUrl, aihUrl, instanceId)
-    for attempt = 1, 5 do
-        print("Retry attempt " .. attempt .. " to push the file to AIH...")
-        if PushToAIH(instanceId, orthancUrl, aihUrl) then return true end
-        os.execute("sleep 60")
+    if response:match("success") then
+        log("Study successfully triggered on Flask!")
+    else
+        log("Failed to trigger study on Flask.")
     end
-    print("Failed to upload file after multiple attempts.")
-    return false
 end
 
--- Function to delete instance from Orthanc
+-- Retry Logic with Backoff
+function RetryFileUpload(orthancUrl, flaskApiUrl, instanceId)
+    local retries = 5
+    local delay = 10
+    for attempt = 1, retries do
+        log("Retry attempt " .. attempt .. " to upload to Flask...")
+        UploadToFlask(instanceId, orthancUrl, flaskApiUrl)
+        if attempt < retries then
+            log("Waiting for " .. delay .. " seconds before retrying...")
+            os.execute("sleep " .. delay)
+            delay = delay * 2
+        end
+    end
+    log("Failed to upload file after multiple attempts.")
+end
+
+-- Function to delete instance from Orthanc after successful upload
 function DeleteFromOrthanc(orthancUrl, instanceId)
     local command = string.format('curl -s -X DELETE %s/instances/%s', orthancUrl, instanceId)
     io.popen(command):read("*a")
-    print("Deleted instance " .. instanceId .. " from Orthanc.")
+    log("Deleted instance " .. instanceId .. " from Orthanc.")
 end
 
--- Function to process uploaded files
-function ProcessUploadedFile(orthancUrl, aihUrl)
+-- Function to process uploaded file
+function ProcessUploadedFile(orthancUrl, flaskApiUrl)
     local instanceId = GetLatestInstanceID(orthancUrl)
     if not instanceId then
-        print("Failed to extract Instance ID.")
+        log("Failed to extract Instance ID.")
         return
     end
-    print("Extracted Instance ID: " .. instanceId)
+    log("Extracted Instance ID: " .. instanceId)
 
-    if CheckForDuplicateAIH(instanceId, aihUrl) then
-        print("Duplicate found. Deleting from Orthanc.")
-        DeleteFromOrthanc(orthancUrl, instanceId)
-    else
-        if not PushToAIH(instanceId, orthancUrl, aihUrl) then
-            RetryFileUpload(orthancUrl, aihUrl, instanceId)
-        end
-    end
+    UploadToFlask(instanceId, orthancUrl, flaskApiUrl)
+    DeleteFromOrthanc(orthancUrl, instanceId)
 end
 
--- URLs for Orthanc and AIH servers
-local orthancApiUrl = "http://127.0.0.1:8042"
-local aihApiUrl = "https://aih.cse.iitd.ac.in/swasth/"
+-- URLs for Orthanc and Flask server
+local orthancApiUrl = "http://127.0.0.1:8042"  -- Orthanc server URL
+local flaskApiUrl = "http://127.0.0.1:5000"  -- Flask server URL
 
 -- Start processing the file
-ProcessUploadedFile(orthancApiUrl, aihApiUrl)
+ProcessUploadedFile(orthancApiUrl, flaskApiUrl)
