@@ -20,6 +20,23 @@ function log(message)
     print("[" .. timestamp .. "] " .. message)
 end
 
+
+
+function CheckIfUploadedToAIH(instanceId, aihApiUrl, token)
+    local checkUrl = string.format("%s/api/v1/dicom-web/studies/%s", aihApiUrl, instanceId)
+    local command = string.format('curl -s -X GET -H "Authorization: Bearer %s" "%s"', token, checkUrl)
+    local response = io.popen(command):read("*a")
+
+    if response:find('"error"') then
+        log("Instance ID " .. instanceId .. " is NOT uploaded to AIH yet.")
+        return false
+    else
+        log("Instance ID " .. instanceId .. " is ALREADY uploaded to AIH. Skipping upload.")
+        return true
+    end
+end
+
+
 function GetLatestInstanceID(orthancUrl)
         if type(orthancUrl) ~= "string" then
             log("Error: orthancUrl should be a string.")
@@ -86,8 +103,21 @@ function UploadToAIH(instanceId, orthancUrl, aihApiUrl, email, password)
         return
     end
 
+
+
     -- Correct upload URL
     local uploadUrl = "https://aih.cse.iitd.ac.in/api/v1/dicom-web/wado-rs/studies"
+
+
+
+    if CheckIfUploadedToAIH(instanceId, uploadUrl, accessToken) then
+        DeleteFromOrthanc(orthancUrl, instanceId)
+        return
+    end
+   
+   
+
+
 
     -- Retrieve the DICOM file from Orthanc and save it locally
     local dicomFilePath = "/tmp/" .. instanceId .. ".dcm"
