@@ -2,7 +2,7 @@ import os
 import requests
 
 # Orthanc server details (update the IP if needed)
-ORTHANC_URL = "http://192.168.133.202:4242/studies"  # Change to 8042 if needed
+ORTHANC_URL = "http://192.168.133.202:4242/studies" 
 
 # DICOM file to send (update path)
 DICOM_DIR = "/path/to/dicom/folder"
